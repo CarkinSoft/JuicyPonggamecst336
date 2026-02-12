@@ -1,91 +1,134 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
-using UnityEngine.Serialization;
+using UnityEngine.SceneManagement;
 
 [RequireComponent(typeof(AudioSource))]
 public class ScoreManager : MonoBehaviour
 {
-    [FormerlySerializedAs("whiteScoreText")] [Header("References")]
-    public TextMeshProUGUI WhiteScoreUI;
-    [FormerlySerializedAs("blackScoreText")] public TextMeshProUGUI BlackScoreUI;
+    [Header("UI")]
+    [SerializeField] private TextMeshProUGUI whiteScoreUI;
+    [SerializeField] private TextMeshProUGUI blackScoreUI;
 
     [Header("Win UI")]
     [SerializeField] private GameObject winPanel;
     [SerializeField] private TextMeshProUGUI winText;
 
-    [Header("Game Rules")]
-    public int winningScore = 10;
+    [Header("Rules")]
+    [SerializeField] private int winningScore = 10;
 
     [Header("Audio")]
-    public AudioClip crowdCheering;
+    [SerializeField] private AudioClip pointSfx;
     [SerializeField] private AudioClip winSfx;
 
-    public ScoreManager scoreManager;
+    [Header("Score FX")]
+    [SerializeField] private float punchScale = 1.25f;
+    [SerializeField] private float punchTime = 0.12f;
+    [SerializeField] private Color punchColor = new Color(1f, 0.9f, 0.2f, 1f);
+
+    [Header("Restart")]
+    [SerializeField] private float restartDelaySeconds = 8f;
 
     private AudioSource audioSource;
-    private int whiteScore = 0;
-    private int blackScore = 0;
+    private int whiteScore;
+    private int blackScore;
+    private bool gameOver;
 
-    public bool GameOver { get; private set; }
+    private Coroutine whiteFx;
+    private Coroutine blackFx;
+
+    public bool GameOver => gameOver;
 
     private void Awake()
     {
         audioSource = GetComponent<AudioSource>();
 
-        WhiteScoreUI.text = GetWhiteScore().ToString();
-        BlackScoreUI.text = GetBlackScore().ToString();
-
         if (winPanel != null)
             winPanel.SetActive(false);
+
+        RefreshUI();
     }
 
-    public void AddWhiteScore()
+    public void AddWhitePoint()
     {
-        if (GameOver) return;
+        if (gameOver) return;
 
-        whiteScore += 1;
-        WhiteScoreUI.text = whiteScore.ToString();
-        audioSource.PlayOneShot(crowdCheering);
+        whiteScore++;
+        RefreshUI();
+
+        if (pointSfx != null) audioSource.PlayOneShot(pointSfx);
+        Punch(whiteScoreUI, ref whiteFx);
 
         CheckWin();
     }
 
-    public void AddBlackScore()
+    public void AddBlackPoint()
     {
-        if (GameOver) return;
+        if (gameOver) return;
 
-        blackScore += 1;
-        BlackScoreUI.text = blackScore.ToString();
-        audioSource.PlayOneShot(crowdCheering);
+        blackScore++;
+        RefreshUI();
+
+        if (pointSfx != null) audioSource.PlayOneShot(pointSfx);
+        Punch(blackScoreUI, ref blackFx);
 
         CheckWin();
+    }
+
+    private void RefreshUI()
+    {
+        if (whiteScoreUI != null) whiteScoreUI.text = whiteScore.ToString();
+        if (blackScoreUI != null) blackScoreUI.text = blackScore.ToString();
+    }
+
+    private void Punch(TextMeshProUGUI ui, ref Coroutine routine)
+    {
+        if (ui == null) return;
+
+        if (routine != null)
+            StopCoroutine(routine);
+
+        routine = StartCoroutine(PunchRoutine(ui));
+    }
+
+    private IEnumerator PunchRoutine(TextMeshProUGUI ui)
+    {
+        Transform t = ui.transform;
+        Vector3 baseScale = t.localScale;
+        Color baseColor = ui.color;
+
+        ui.color = punchColor;
+        t.localScale = baseScale * punchScale;
+
+        yield return new WaitForSecondsRealtime(punchTime);
+
+        ui.color = baseColor;
+        t.localScale = baseScale;
     }
 
     private void CheckWin()
     {
-        if (whiteScore >= winningScore)
-            EndGame("White");
-        else if (blackScore >= winningScore)
-            EndGame("Black");
+        if (whiteScore >= winningScore) EndGame("White");
+        else if (blackScore >= winningScore) EndGame("Black");
     }
 
     private void EndGame(string winner)
     {
-        GameOver = true;
+        gameOver = true;
 
-        if (winText != null)
-            winText.text = $"{winner} has won!";
+        if (winText != null) winText.text = $"{winner} wins!";
+        if (winPanel != null) winPanel.SetActive(true);
 
-        if (winPanel != null)
-            winPanel.SetActive(true);
+        if (winSfx != null) audioSource.PlayOneShot(winSfx);
 
-        if (winSfx != null)
-            audioSource.PlayOneShot(winSfx);
-
-        // Pause after we show UI / play sound (sound still plays with timeScale=0)
-        Time.timeScale = 0f;
+        StartCoroutine(RestartRoutine());
     }
 
-    public int GetWhiteScore() => whiteScore;
-    public int GetBlackScore() => blackScore;
+    private IEnumerator RestartRoutine()
+    {
+        yield return new WaitForSecondsRealtime(restartDelaySeconds);
+
+        Scene scene = SceneManager.GetActiveScene();
+        SceneManager.LoadScene(scene.buildIndex);
+    }
 }

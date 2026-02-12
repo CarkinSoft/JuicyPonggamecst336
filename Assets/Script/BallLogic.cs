@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody))]
@@ -5,113 +6,140 @@ using UnityEngine;
 public class BallLogic : MonoBehaviour
 {
     [Header("Serve")]
+    [SerializeField] private Transform spawnPoint;
     [SerializeField] private float serveSpeed = 8f;
 
-    [Header("Respawn")]
-    [SerializeField] private GameObject ballPrefab;
-    [SerializeField] private Transform spawnPoint;
+    [Header("Bounce")]
+    [SerializeField] private string paddleTag = "Paddle";
+    [SerializeField] private float maxBounceAngle = 45f;
+    [SerializeField] private float speedMultiplierPerHit = 1.08f;
+    [SerializeField] private float maxSpeed = 25f;
+    [SerializeField] private float minZDeflection = 0.15f;
 
-    private Vector3 initialSpawnPos;
-    private Quaternion initialSpawnRot;
-
-    [Header("Goals (Tags on the GOAL trigger objects)")]
-    [SerializeField] private string blackGoalTag = "GoalBlack";
-    [SerializeField] private string whiteGoalTag = "GoalWhite";
-
-    [Header("Score")]
-    [SerializeField] private ScoreManager scoreManager;
-
-    [Header("Bounce SFX")]
-    [SerializeField] private AudioClip[] bounceClips;
-    [SerializeField] private float minTimeBetweenBounces = 0.05f;
+    [Header("Audio")]
+    [SerializeField] private AudioClip paddleHitClip;
+    [SerializeField] private float minTimeBetweenPaddleHits = 0.05f;
+    [SerializeField] private float minPitch = 0.95f;
+    [SerializeField] private float maxPitch = 1.25f;
+    [SerializeField] private float speedForMaxPitch = 20f;
+    [SerializeField] private float edgePitchBoost = 0.12f;
+    [SerializeField] private float edgeVolumeBoost = 0.15f;
 
     private Rigidbody rb;
     private AudioSource audioSource;
-    private float lastBounceTime;
-    private bool isDespawning;
+
+    private Vector3 defaultSpawnPos;
+    private Quaternion defaultSpawnRot;
+
+    private float lastPaddleHitTime;
+    private Coroutine speedRoutine;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
         audioSource = GetComponent<AudioSource>();
 
-        if (bounceClips == null || bounceClips.Length == 0)
-            bounceClips = Resources.LoadAll<AudioClip>("Audio");
+        defaultSpawnPos = transform.position;
+        defaultSpawnRot = transform.rotation;
 
-        if (scoreManager == null)
-            scoreManager = FindFirstObjectByType<ScoreManager>();
-
-        initialSpawnPos = transform.position;
-        initialSpawnRot = transform.rotation;
+        if (paddleHitClip == null)
+            paddleHitClip = Resources.Load<AudioClip>("Audio/PaddleHit");
     }
 
     private void Start()
     {
-        ServeUpOrDown();
+        ServeRandom();
     }
 
-    private void ServeUpOrDown()
+    public void ResetToCenter()
     {
+        Vector3 pos = spawnPoint != null ? spawnPoint.position : defaultSpawnPos;
+        Quaternion rot = spawnPoint != null ? spawnPoint.rotation : defaultSpawnRot;
+
+        rb.position = pos;
+        rb.rotation = rot;
         rb.linearVelocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
-
-        float yDir = Random.value < 0.5f ? -1f : 1f;
-        rb.linearVelocity = new Vector3(0f, yDir, 0f) * serveSpeed;
     }
 
-    private void OnTriggerEnter(Collider other)
+    public void ServeRandom()
     {
-        if (isDespawning) return;
-
-        // If someone already won, don't keep spawning balls
-        if (scoreManager != null && scoreManager.GameOver)
-        {
-            Destroy(gameObject);
-            return;
-        }
-
-        if (other.CompareTag(blackGoalTag))
-        {
-            if (scoreManager != null) scoreManager.AddWhiteScore();
-            RespawnBall();
-            return;
-        }
-
-        if (other.CompareTag(whiteGoalTag))
-        {
-            if (scoreManager != null) scoreManager.AddBlackScore();
-            RespawnBall();
-            return;
-        }
-
-        // Helpful when goal tags aren't set correctly
-        Debug.Log($"Ball triggered '{other.name}' but it wasn't tagged '{blackGoalTag}' or '{whiteGoalTag}'. Tag was '{other.tag}'.");
+        int dir = Random.value < 0.5f ? -1 : 1;
+        Serve(dir);
     }
 
-    private void RespawnBall()
+    public void Serve(int yDirection)
     {
-        isDespawning = true;
-
-        Vector3 pos = spawnPoint != null ? spawnPoint.position : initialSpawnPos;
-        Quaternion rot = spawnPoint != null ? spawnPoint.rotation : initialSpawnRot;
-
-        GameObject prefabToSpawn = ballPrefab != null ? ballPrefab : gameObject;
-        Instantiate(prefabToSpawn, pos, rot);
-
-        Destroy(gameObject);
+        ResetToCenter();
+        rb.linearVelocity = new Vector3(0f, Mathf.Sign(yDirection), 0f) * serveSpeed;
     }
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (Time.time - lastBounceTime < minTimeBetweenBounces)
+        if (collision.collider == null) return;
+        if (!collision.collider.CompareTag(paddleTag)) return;
+
+        if (Time.time - lastPaddleHitTime < minTimeBetweenPaddleHits)
             return;
 
-        lastBounceTime = Time.time;
+        lastPaddleHitTime = Time.time;
 
-        if (bounceClips == null || bounceClips.Length == 0)
-            return;
+        Vector3 v = rb.linearVelocity;
+        float incomingY = v.y;
+        if (Mathf.Abs(incomingY) < 0.001f) incomingY = -1f;
 
-        audioSource.PlayOneShot(bounceClips[Random.Range(0, bounceClips.Length)]);
+        float outY = -Mathf.Sign(incomingY);
+
+        Bounds b = collision.collider.bounds;
+        float relativeZ = 0f;
+        if (b.extents.z > 0.0001f)
+            relativeZ = Mathf.Clamp((collision.GetContact(0).point.z - b.center.z) / b.extents.z, -1f, 1f);
+
+        float angle = relativeZ * maxBounceAngle;
+        float zFromAngle = Mathf.Tan(angle * Mathf.Deg2Rad);
+
+        float z = Mathf.Sign(relativeZ == 0f ? (Random.value < 0.5f ? -1f : 1f) : relativeZ) *
+                  Mathf.Max(Mathf.Abs(zFromAngle), minZDeflection);
+
+        Vector3 dir = new Vector3(0f, outY, z).normalized;
+
+        float newSpeed = Mathf.Min(Mathf.Max(serveSpeed, v.magnitude) * speedMultiplierPerHit, maxSpeed);
+        rb.linearVelocity = dir * newSpeed;
+
+        PlayPaddleHitSfx(newSpeed, Mathf.Abs(relativeZ));
+    }
+
+    private void PlayPaddleHitSfx(float ballSpeed, float edge01)
+    {
+        if (paddleHitClip == null) return;
+
+        float t = Mathf.Clamp01(ballSpeed / Mathf.Max(0.01f, speedForMaxPitch));
+        float pitch = Mathf.Lerp(minPitch, maxPitch, t) + edge01 * edgePitchBoost;
+        float volume = 1f + edge01 * edgeVolumeBoost;
+
+        audioSource.pitch = pitch;
+        audioSource.PlayOneShot(paddleHitClip, volume);
+    }
+
+    public void ApplySpeedMultiplier(float multiplier, float durationSeconds)
+    {
+        if (speedRoutine != null)
+            StopCoroutine(speedRoutine);
+
+        speedRoutine = StartCoroutine(SpeedMultiplierRoutine(multiplier, durationSeconds));
+    }
+
+    private IEnumerator SpeedMultiplierRoutine(float multiplier, float durationSeconds)
+    {
+        multiplier = Mathf.Max(0.1f, multiplier);
+
+        rb.linearVelocity *= multiplier;
+        yield return new WaitForSeconds(durationSeconds);
+
+        if (rb != null)
+            rb.linearVelocity /= multiplier;
+
+        speedRoutine = null;
     }
 }
 
